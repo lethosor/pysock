@@ -49,7 +49,7 @@ class EventHandler:
 
     def trigger(self, event, *data):
         if event not in self.callbacks:
-            raise ValueError('Unrecognized event: %s' % event)
+            self.callbacks[event] = []
         for handler in self.callbacks[event]:
             handler(*data)
 
