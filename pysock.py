@@ -17,6 +17,10 @@ else:
 
 SOCKET_CLOSED = (errno.EBADF, errno.EPIPE, errno.ECONNRESET)
 SOCKET_NO_DATA = (errno.EAGAIN, )
+SOCKET_NOT_CONNECTED = (errno.ENOTCONN, errno.EBADF)
+
+# unique
+SHUTDOWN = object()
 
 def encode_message(data):
     return zlib.compress(pickle.dumps(data, 2))  # Python 2/3-compatible
@@ -63,7 +67,10 @@ class SocketSendThread(threading.Thread):
     def run(self):
         try:
             while True:
-                msg = self.protocol.encode(self.send_queue.get())
+                msg = self.send_queue.get()
+                if msg == SHUTDOWN:
+                    break
+                msg = self.protocol.encode(msg)
                 self.socket.send(struct.pack('<i', len(msg)))
                 self.socket.send(msg)
         except socket.error as e:
@@ -90,18 +97,34 @@ class SocketRecvThread(threading.Thread):
                 self.events.trigger('receive', self.protocol.decode(packet_contents))
         except socket.error as e:
             if e.errno in SOCKET_CLOSED:
-                pass
+                self.events.trigger('close')
             else:
                 raise
+        except struct.error:
+            # Fewer than 4 bytes received, connection closed
+            self.events.trigger('close')
 
 class SocketConnection:
     def __init__(self, socket, protocol):
+        self.socket = socket
         self.send_thread = SocketSendThread(socket, protocol)
         self.recv_thread = SocketRecvThread(socket, protocol)
 
     def listen(self):
         self.send_thread.start()
         self.recv_thread.start()
+        self.recv_thread.events.bind('close', lambda: self.close())
+
+    def close(self):
+        self.send_thread.send(SHUTDOWN)
+        try:
+            self.socket.shutdown(socket.SHUT_RDWR)
+            self.socket.close()
+        except socket.error as e:
+            if e.errno in SOCKET_NOT_CONNECTED:
+                pass
+            else:
+                raise
 
 class Server:
     def __init__(self, host, port):
