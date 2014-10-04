@@ -37,31 +37,36 @@ class Protocol:
 class EventHandler:
     def __init__(self):
         self.callbacks = {}
+        self.lock = threading.RLock()
 
     def bind(self, event, handler):
-        if not event in self.callbacks:
-            self.callbacks[event] = []
-        if handler not in self.callbacks[event]:
-            self.callbacks[event].append(handler)
+        with self.lock:
+            if not event in self.callbacks:
+                self.callbacks[event] = []
+            if handler not in self.callbacks[event]:
+                self.callbacks[event].append(handler)
 
     def unbind(self, event, handler):
-        if event not in self.callbacks:
-            raise ValueError('Unrecognized event: %s' % event)
-        if handler not in self.callbacks[event]:
-            raise ValueError('Handler not bound to event')
-        self.callbacks[event].remove(handler)
+        with self.lock:
+            if event not in self.callbacks:
+                raise ValueError('Unrecognized event: %s' % event)
+            if handler not in self.callbacks[event]:
+                raise ValueError('Handler not bound to event')
+            self.callbacks[event].remove(handler)
 
     def trigger(self, event, *data):
-        if event not in self.callbacks:
-            self.callbacks[event] = []
-        for handler in self.callbacks[event]:
-            handler(*data)
+        with self.lock:
+            if event not in self.callbacks:
+                self.callbacks[event] = []
+            for handler in self.callbacks[event]:
+                handler(*data)
 
 class SocketSendThread(threading.Thread):
     def __init__(self, socket, protocol):
-        threading.Thread.__init__(self)
+        super(SocketSendThread, self).__init__()
         self.socket = socket
         self.protocol = protocol
+        self.events = EventHandler()
         self.send_queue = queue.Queue()
 
     def run(self):
@@ -78,13 +83,15 @@ class SocketSendThread(threading.Thread):
                 pass
             else:
                 raise
+        finally:
+            self.events.trigger('close')
 
     def send(self, msg):
         self.send_queue.put(msg)
 
 class SocketRecvThread(threading.Thread):
     def __init__(self, socket, protocol):
-        threading.Thread.__init__(self)
+        super(SocketRecvThread, self).__init__()
         self.socket = socket
         self.protocol = protocol
         self.events = EventHandler()
@@ -92,7 +99,10 @@ class SocketRecvThread(threading.Thread):
     def run(self):
         try:
             while True:
-                packet_length = struct.unpack('<i', self.socket.recv(4))[0]
+                packet_length = self.socket.recv(4)
+                if len(packet_length) != 4:
+                    break
+                packet_length = struct.unpack('<i', packet_length)[0]
                 packet_contents = self.socket.recv(packet_length)
                 self.events.trigger('receive', self.protocol.decode(packet_contents))
         except socket.error as e:
@@ -102,11 +112,14 @@ class SocketRecvThread(threading.Thread):
                 raise
         except struct.error:
             # Fewer than 4 bytes received, connection closed
+            pass
+        finally:
             self.events.trigger('close')
 
 class SocketConnection:
     def __init__(self, socket, protocol):
         self.socket = socket
+        self.events = EventHandler()
         self.send_thread = SocketSendThread(socket, protocol)
         self.recv_thread = SocketRecvThread(socket, protocol)
 
