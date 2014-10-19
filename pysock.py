@@ -9,6 +9,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 
 if sys.version[0] == '2':
     import Queue as queue
@@ -21,12 +22,6 @@ SOCKET_NOT_CONNECTED = (errno.ENOTCONN, errno.EBADF)
 
 # unique
 SHUTDOWN = object()
-
-def encode_message(data):
-    return zlib.compress(pickle.dumps(data, 2))  # Python 2/3-compatible
-
-def decode_message(data):
-    return pickle.loads(zlib.decompress(data))
 
 class Protocol:
     def encode(self, data):
@@ -179,7 +174,32 @@ class Server:
         self.socket.listen(4)
 
 class Client:
-    def __init__(self, host, port, protocol=None):
+    """ A client that connects to a Server instance """
+    def __init__(self, host, port, protocol=None,
+                 retry_timeout=0, retry_delay=0.1):
+        """ Connect to a server
+
+        host: Destination hostname (e.g. 'localhost')
+        port: Destination port (e.g. 8000)
+        protocol: A Protocol instance to use to communicate with the server.
+            This does not necessarily have to be the same type as the protocol
+            used on the server. Can also be specified as a class attribute:
+
+            class ExampleClient(pysock.Client):
+                protocol = ExampleProtocol()
+                # ...
+
+        retry_timeout: The maximum time (in seconds) that can pass before a
+            connection is considered unsuccessful. Note that this timeout is
+            only triggered when a connection attempt fails (for example,
+            a slow connection will not trigger the timeout). A value of 0 will
+            allow exactly one connection attempt.
+        retry_delay: The time to wait after a connection attempt fails before
+            retrying. Setting this below 0.1 is not recommended, as connection
+            attempts that fail immediately will result in excessive attempts.
+            retry_timeout is checked after this delay has elapsed.
+        """
+
         self.events = EventHandler()
         self.connected = False
         self.addr = (host, port)
@@ -187,9 +207,20 @@ class Client:
         if not self.protocol:
             raise ValueError('Undefined protocol')
 
-        # Initialize raw socket
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect(self.addr)
+        # Attempt to connect to server
+        initial_time = time.time()
+        while True:
+            try:
+                # Initialize raw socket
+                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.socket.connect(self.addr)
+            except socket.error as e:
+                time.sleep(retry_delay)
+                if time.time() - initial_time >= retry_timeout:
+                    raise
+            else:
+                # Connection successful
+                break
         self.connection = SocketConnection(self.socket, self.protocol)
 
         # Set up event handlers
