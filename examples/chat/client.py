@@ -10,10 +10,10 @@ if len(sys.argv) >= 3:
     ADDRESS = (sys.argv[1], int(sys.argv[2]))
 
 class Ui(tk.Frame):
-    def __init__(self, parent, client):
+    def __init__(self, parent):
         tk.Frame.__init__(self, parent)
         self.parent = parent
-        self.client = client
+        self.client = None
         self.grid()
         self.history = tk.Text(self, width=80, height=20, wrap=tk.WORD)
         self.history.grid(row=1, column=1, columnspan=3)
@@ -24,54 +24,84 @@ class Ui(tk.Frame):
         self.entry.focus_set()
         self.update()
 
-    def send(self):
-        if not self.client.connected:
+    def parse_command(self, cmd):
+        if not cmd.startswith('/'):
+            return None
+        return cmd[1:].split(' ')
+
+    def connect(self):
+        if self.client is not None and self.client.connected:
+            self.log('[local] Already connected')
             return
-        msg = self.entry.get(0.0, tk.END).rstrip('\n')
-        self.entry.delete(0.0, tk.END)
-        if msg == '/quit':
+        self.log('[local] Attempting to connect to server...')
+        try:
+            client = Client(ADDRESS[0], ADDRESS[1])
+        except pysock.socket.error as e:
+            self.log('[local] Could not connect to server. Type "/connect" to retry.')
+            return
+        self.client = client
+
+    def disconnect(self):
+        if self.client is not None:
             self.client.disconnect()
+
+    def clear_entry(self):
+        self.entry.delete(0.0, tk.END)
+
+    def send(self):
+        msg = self.entry.get(0.0, tk.END).rstrip('\n')
+        cmd = self.parse_command(msg)
+        if cmd:
+            self.clear_entry()
+            if cmd[0] == 'quit':
+                self.disconnect()
+                return
+            elif cmd[0] == 'connect':
+                self.connect()
+                return
+            elif cmd[0]:
+                msg = {'command': True, cmd[0]: ' '.join(cmd[1:])}
+        if self.client is None or not self.client.connected:
             return
         self.client.send(msg)
+        self.clear_entry()
 
     def receive(self, msg):
         self.history.config(state=tk.NORMAL)
         self.history.insert(tk.END, '%s\n' % msg)
         self.history.see(tk.END)
         self.history.config(state=tk.DISABLED)
+    log = receive
 
     def update(self):
-        for msg in self.client.queue:
-            self.receive(msg)
-        self.client.queue = []
-        if not self.client.connected:
-            self.receive('<Disconnected>')
-            return
+        if self.client is not None:
+            for msg in self.client.queue:
+                if msg is Client.DISCONNECTED:
+                    self.log('[local] Disconnected')
+                else:
+                    self.receive(msg)
+            self.client.queue = []
         self.after(1, self.update)
 
 class Client(pysock.Client):
+    DISCONNECTED = object()
     protocol = proto.PickleProtocol()
     def on_connect(self):
-        print('- connected')
         self.queue = []
     def on_receive(self, msg):
         self.queue.append(msg)
     def on_disconnect(self):
-        print('- disconnected')
+        self.queue.append(self.DISCONNECTED)
 
 def main():
-    print('Attempting to connect to server...')
-    try:
-        client = Client(ADDRESS[0], ADDRESS[1], retry_timeout=10)
-    except pysock.socket.error as e:
-        print('Could not connect to server.')
-        return
     root = tk.Tk()
-    Ui(root, client)
+    ui = Ui(root)
+    ui.connect()
     try:
         root.mainloop()
     finally:
-        client.disconnect()
+        if ui.client is not None:
+            ui.client.disconnect()
 
 if __name__ == '__main__':
     main()
