@@ -1,5 +1,5 @@
 from __future__ import print_function
-import pysock, proto, sys
+import datetime, pysock, proto, sys
 if sys.version[0] == '3':
     import tkinter as tk
 else:
@@ -67,6 +67,8 @@ class Ui(tk.Frame):
         self.clear_entry()
 
     def receive(self, msg):
+        msg = '\n'.join(['[%s] %s' % (datetime.datetime.now().strftime('%H:%M:%S'), m)
+                         for m in msg.split('\n')])
         self.history.config(state=tk.NORMAL)
         self.history.insert(tk.END, '%s\n' % msg)
         self.history.see(tk.END)
