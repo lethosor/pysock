@@ -16,7 +16,7 @@ if sys.version[0] == '2':
 else:
     import queue
 
-SOCKET_CLOSED = (errno.EBADF, errno.EPIPE, errno.ECONNRESET)
+SOCKET_CLOSED = (errno.EBADF, errno.EPIPE, errno.ECONNRESET, errno.ECONNABORTED)
 SOCKET_NO_DATA = (errno.EAGAIN, )
 SOCKET_NOT_CONNECTED = (errno.ENOTCONN, errno.EBADF)
 
